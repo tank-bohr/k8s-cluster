@@ -1,0 +1,152 @@
+- hosts: all
+  become: yes
+  tasks:
+    - set_fact:
+        docker_minimal_version: "19.03"
+        control_plane_node: wk000
+
+    - set_fact:
+        is_control_plane_node: "{{ ansible_nodename == control_plane_node }}"
+
+    - name: Install common tools
+      apt:
+        update_cache: yes
+        name:
+          - net-tools
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - gnupg-agent
+          - software-properties-common
+
+    - name: Add the br_netfilter module
+      modprobe:
+        name: br_netfilter
+        state: present
+
+    - name: Ensure net.bridge.bridge-nf-call-iptables is set to 1 in your sysctl config
+      copy:
+        dest: /etc/modules-load.d/k8s.conf
+        content: |
+          br_netfilter
+
+    - name: Ensure net.bridge.bridge-nf-call-iptables is set to 1 in your sysctl config
+      copy:
+        dest: /etc/sysctl.d/k8s.conf
+        content: |
+          net.bridge.bridge-nf-call-ip6tables = 1
+          net.bridge.bridge-nf-call-iptables = 1
+
+    - name: Add Docker’s official GPG key
+      apt_key:
+        id: 9DC858229FC7DD38854AE2D88D81803C0EBFCD88
+        url: https://download.docker.com/linux/ubuntu/gpg
+        state: present
+
+    - apt_repository:
+        repo: "deb [arch=amd64] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
+        state: present
+
+    - name: Create the `docker` group
+      group:
+        name: docker
+        state: present
+
+    - name: Add your user to the `docker` group.
+      user:
+        append: yes
+        groups:
+          - docker
+        name: "{{ ansible_user }}"
+
+    - name: Install docker
+      apt:
+        update_cache: yes
+        name:
+          - "docker-ce=5:{{ docker_minimal_version }}*"
+          - "docker-ce-cli=5:{{ docker_minimal_version }}*"
+          - containerd.io
+
+    - name: Docker config
+      copy:
+        dest: /etc/docker/daemon.json
+        content: |
+          {
+            "exec-opts": ["native.cgroupdriver=systemd"],
+            "log-driver": "json-file",
+            "log-opts": {
+              "max-size": "100m"
+            },
+            "storage-driver": "overlay2"
+          }
+      register: docker_daemon_json
+
+    - file:
+        path : /etc/systemd/system/docker.service.d
+        recurse: true
+        state: directory
+        owner: root
+
+    - name: Restart docker service
+      systemd:
+        name: docker
+        state: restarted
+        daemon_reload: yes
+      when: docker_daemon_json.changed
+
+    # - name: Detect k8s stable version
+    #   uri:
+    #     url: https://dl.k8s.io/release/stable.txt
+    #     return_content: yes
+    #   register: k8s_stable
+
+    # - name: Download kubectl
+    #   get_url:
+    #     dest: /usr/local/bin/kubectl
+    #     url: "https://dl.k8s.io/release/{{ k8s_stable.content }}/bin/linux/amd64/kubectl"
+    #     checksum: "sha256:https://storage.googleapis.com/kubernetes-release/release/{{ k8s_stable.content }}/bin/linux/amd64/kubectl.sha256"
+    #     owner: root
+    #     group: root
+    #     mode: '0755'
+
+    - name: Add k8s official GPG key
+      apt_key:
+        id: 54A647F9048D5688D7DA2ABE6A030B21BA07F4FB
+        url: https://packages.cloud.google.com/apt/doc/apt-key.gpg
+        state: present
+
+    - apt_repository:
+        filename: kubernetes.list
+        repo: "deb https://apt.kubernetes.io/ kubernetes-xenial main"
+        state: present
+
+    - name: Install k8s
+      apt:
+        update_cache: yes
+        name:
+          - kubelet
+          - kubeadm
+          - kubectl
+
+##### On control pane node
+
+    - name: Setup cluster
+      shell:
+        cmd: kubeadm init
+        creates: /etc/kubernetes/admin.conf
+      when: is_control_plane_node
+
+    - name: Move config
+      copy:
+        remote_src: yes
+        src: /etc/kubernetes/admin.conf
+        dest: "{{ ansible_user_dir }}/.kube/config"
+        owner: "{{ ansible_effective_user_id }}"
+        group: "{{ ansible_effective_group_id }}"
+      when: is_control_plane_node
+
+    - name: Get join command
+      shell:
+        cmd: kubeadm token create --print-join-command
+      register: kubeadm_join_command
+      when: is_control_plane_node
