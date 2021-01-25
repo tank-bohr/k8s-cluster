@@ -18,6 +18,11 @@
           - curl
           - gnupg-agent
           - software-properties-common
+          - python3-pip
+
+    - name: Install openshift (needed fro k8s_info)
+      pip:
+        name: openshift
 
     - name: Add the br_netfilter module
       modprobe:
@@ -132,17 +137,8 @@
 
     - name: Setup cluster
       shell:
-        cmd: kubeadm init
+        cmd: "kubeadm init --apiserver-advertise-address {{ ansible_host }}"
         creates: /etc/kubernetes/admin.conf
-      when: is_control_plane_node
-
-    - name: Move config
-      copy:
-        remote_src: yes
-        src: /etc/kubernetes/admin.conf
-        dest: "{{ ansible_user_dir }}/.kube/config"
-        owner: "{{ ansible_effective_user_id }}"
-        group: "{{ ansible_effective_group_id }}"
       when: is_control_plane_node
 
     - name: Get join command
@@ -150,3 +146,31 @@
         cmd: kubeadm token create --print-join-command
       register: kubeadm_join_command
       when: is_control_plane_node
+
+    # - name: Move config
+    #   copy:
+    #     remote_src: yes
+    #     src: /etc/kubernetes/admin.conf
+    #     dest: "{{ ansible_user_dir }}/.kube/config"
+    #     owner: "{{ ansible_effective_user_id }}"
+    #     group: "{{ ansible_effective_group_id }}"
+    #   when: is_control_plane_node
+
+##### On other nodes
+
+    - name: Join other nodes
+      shell:
+        cmd: "{{ hostvars[control_plane_node].kubeadm_join_command.stdout }}"
+        creates: /etc/kubernetes/kubelet.conf
+      when: not is_control_plane_node
+
+    - name: Inspect cluster
+      k8s_info:
+        kind: Node
+        kubeconfig: /etc/kubernetes/kubelet.conf
+      when: not is_control_plane_node
+      register: cluster_info
+
+    - debug:
+        var: cluster_info
+      when: not is_control_plane_node
