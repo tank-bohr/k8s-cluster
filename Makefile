@@ -1,4 +1,4 @@
-.PHONY: provision show-pods setup-dashboard dashboard-token dashboard
+.PHONY: provision show-pods setup-dashboard dashboard-token dashboard http-echo-ips
 
 OSNAME := $(shell uname -s)
 
@@ -21,11 +21,11 @@ provision: kube-flannel.yml
 kube-flannel.yml:
 	curl https://raw.githubusercontent.com/coreos/flannel/master/Documentation/kube-flannel.yml --remote-name
 
-show-pods: admin.conf
-	kubectl get pods --all-namespaces
-
 setup-dashboard: admin.conf
 	kubectl apply --filename=https://raw.githubusercontent.com/kubernetes/dashboard/v2.0.0/aio/deploy/recommended.yaml
+
+setup-dashboard-user: admin.conf
+	kubectl apply --filename=dashboard-adminuser.yaml
 
 dashboard-token:
 	kubectl \
@@ -39,3 +39,6 @@ dashboard-token:
 dashboard: dashboard-token
 	$(OPEN) http://localhost:8001/api/v1/namespaces/kubernetes-dashboard/services/https:kubernetes-dashboard:/proxy/
 	kubectl proxy
+
+http-echo-ips:
+	kubectl get pods --selector=app=http-echo -o jsonpath='{.items[*].status.podIP}'
