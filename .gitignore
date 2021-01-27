@@ -1,3 +1,5 @@
 tmp/
 .vagrant/
 inventory.yml
+kube-flannel.yml
+admin.conf
