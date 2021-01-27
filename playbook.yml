@@ -1,14 +1,35 @@
 ---
 - hosts: all
+  vars:
+    all_ifaces: []
+
   tasks:
     - set_fact:
         docker_minimal_version: "19.03"
         control_plane_node: wk000
-        pod_network_cidr: 10.244.0.0/16
+        kubeconfig: /etc/kubernetes/admin.conf
 
     - set_fact:
         is_control_plane_node: "{{ ansible_nodename == control_plane_node }}"
-        kubeconfig: /etc/kubernetes/admin.conf
+
+    - set_fact:
+        all_ifaces: "{{ all_ifaces + [vars['ansible_' + item]] }}"
+      with_items: "{{ ansible_interfaces }}"
+
+    - set_fact:
+        current_iface: "{{ all_ifaces | selectattr('ipv4.address', 'equalto', ansible_host) | first }}"
+
+    - set_fact:
+        flannel: "{{ lookup('file', 'kube-flannel.yml') | from_yaml_all | list }}"
+
+    - set_fact:
+        flannel_config_map: "{{ flannel | selectattr('kind', 'equalto', 'ConfigMap') | first }}"
+
+    - set_fact:
+        flannel_config_map_data: "{{ flannel_config_map.data['net-conf.json'] | from_json }}"
+
+    - set_fact:
+        pod_network_cidr: "{{ flannel_config_map_data['Network'] }}"
 
     - name: Install common tools
       apt:
@@ -179,9 +200,7 @@
       k8s:
         state: present
         kubeconfig: "{{ kubeconfig }}"
-        # Doesn't work for some reason. Make it with `curl` in Makefile
-        # definition: "{{ lookup('url', 'https://raw.githubusercontent.com/coreos/flannel/master/Documentation/kube-flannel.yml') }}"
-        definition: "{{ lookup('file', 'kube-flannel.yml') }}"
+        definition: "{{ flannel }}"
       when: is_control_plane_node
       become: yes
 
