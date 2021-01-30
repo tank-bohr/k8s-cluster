@@ -1,8 +1,5 @@
 ---
 - hosts: all
-  vars:
-    all_ifaces: []
-
   tasks:
     - set_fact:
         docker_minimal_version: "19.03"
@@ -13,23 +10,49 @@
         is_control_plane_node: "{{ ansible_nodename == control_plane_node }}"
 
     - set_fact:
-        all_ifaces: "{{ all_ifaces + [vars['ansible_' + item]] }}"
+        all_ifaces: "{{ all_ifaces | default([]) + [vars['ansible_' + item]] }}"
       with_items: "{{ ansible_interfaces }}"
 
-    - set_fact:
+    - name: Detect current network interface
+      set_fact:
         current_iface: "{{ all_ifaces | selectattr('ipv4.address', 'equalto', ansible_host) | first }}"
 
-    - set_fact:
+    - name: Read and parse flannel manifest
+      set_fact:
         flannel: "{{ lookup('file', 'kube-flannel.yml') | from_yaml_all | list }}"
 
-    - set_fact:
+    - name: Extract network_cidr from flannel manifest
+      set_fact:
+        pod_network_cidr: "{{ flannel_config_map_data['Network'] }}"
+      vars:
         flannel_config_map: "{{ flannel | selectattr('kind', 'equalto', 'ConfigMap') | first }}"
-
-    - set_fact:
         flannel_config_map_data: "{{ flannel_config_map.data['net-conf.json'] | from_json }}"
 
-    - set_fact:
-        pod_network_cidr: "{{ flannel_config_map_data['Network'] }}"
+    - name: Update flannel manifest with current iface name
+      set_fact:
+        flannel: "{{ without_daemon_set + [ flannel_daemon_set ] }}"
+      vars:
+        iface_arg: "--iface={{ current_iface.device }}"
+        daemon_set: "{{ flannel | selectattr('kind', 'equalto', 'DaemonSet') | first }}"
+        container_spec: "{{ daemon_set.spec.template.spec.containers | selectattr('name', 'equalto', 'kube-flannel') | first }}"
+        updated_spec:
+          args: "{{ container_spec.args + [ iface_arg ] }}"
+        flanneld_container_spec: "{{ container_spec | combine(updated_spec, recursive=true) }}"
+        updated:
+          spec:
+            template:
+              spec:
+                containers:
+                  - "{{ flanneld_container_spec }}"
+        flannel_daemon_set: "{{ daemon_set | combine(updated, recursive=true) }}"
+        without_daemon_set: "{{ flannel | rejectattr('kind', 'equalto', 'DaemonSet') | list }}"
+
+    - name: Make sure that dynamically updated flannel manifest is good enough
+      debug:
+        var: container_spec.args
+      vars:
+        daemon_set: "{{ flannel | selectattr('kind', 'equalto', 'DaemonSet') | first }}"
+        container_spec: "{{ daemon_set.spec.template.spec.containers | selectattr('name', 'equalto', 'kube-flannel') | first }}"
 
     - name: Install common tools
       apt:
@@ -172,6 +195,8 @@
           - kubectl
       become: yes
 
+    # See details here
+    # https://kubernetes.io/docs/setup/production-environment/tools/kubeadm/kubelet-integration/#the-kubelet-drop-in-file-for-systemd
     - name: Update node ip
       copy:
         dest: /etc/default/kubelet

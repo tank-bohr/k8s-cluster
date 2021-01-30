@@ -28,7 +28,7 @@ setup-dashboard-user: admin.conf
 	kubectl apply --filename=dashboard-adminuser.yaml
 
 dashboard-token:
-	kubectl \
+	@kubectl \
 		--namespace=kubernetes-dashboard \
 		--output=json \
 		get secret \
