@@ -33,4 +33,4 @@ spec:
   selector:
     app: http-echo
   ports:
-  - port: 8080
+  - port: 80

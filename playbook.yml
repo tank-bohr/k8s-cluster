@@ -172,6 +172,13 @@
           - kubectl
       become: yes
 
+    - name: Update node ip
+      copy:
+        dest: /etc/default/kubelet
+        content: "KUBELET_EXTRA_ARGS=--node-ip={{ ansible_host }}"
+      register: docker_daemon_json
+      become: yes
+
 ##### On control pane node
 
     - name: Setup cluster
